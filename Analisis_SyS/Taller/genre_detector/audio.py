@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlparse
 
-from .config import SpectralConfig
+from .config import SpectralConfig, resolve_path
 
 try:
     import yt_dlp
@@ -153,7 +153,12 @@ def ensure_local_audio(path_or_url: str, cfg: SpectralConfig) -> str:
         return path_or_url
 
     if not looks_like_url(path_or_url):
-        raise FileNotFoundError(f"No existe el archivo ni es una URL válida: {path_or_url}")
+        resolved = resolve_path(path_or_url)
+        if Path(resolved).exists():
+            return str(resolved)
+        raise FileNotFoundError(
+            f"No existe el archivo ni es una URL válida: {path_or_url} (resuelto como {resolved})."
+        )
 
     if yt_dlp is None:
         raise RuntimeError("Se requiere 'yt_dlp' para descargar audio desde enlaces.")

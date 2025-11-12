@@ -17,13 +17,14 @@ python -m Analisis_SyS.Taller.genre_detector.pipeline \
     --dataset Analisis_SyS/Taller/dataset.csv \
     --path-col link \
     --label-col genre \
-    --out-model Analisis_SyS/Taller/artifacts/genre_knn.joblib \
-    --cache-dir Analisis_SyS/Taller/audio_cache
+    --out-model Analisis_SyS/Taller/artifacts/genre_knn.joblib
 
 # Clasificar un enlace de YouTube una vez el modelo exista
 python -m Analisis_SyS.Taller.genre_detector.pipeline \
     --out-model Analisis_SyS/Taller/artifacts/genre_knn.joblib \
     --classify \"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"
 ```
+
+Las rutas relativas se resuelven contra `Analisis_SyS/Taller`, por lo que no es necesario ubicar la terminal en una carpeta específica ni se crearán copias del proyecto. Si quieres forzar otro directorio (p. ej. `./cache` o `/tmp/cache`), pásalo explícitamente en `--cache-dir`.
 
 En los notebooks basta con llamar a `predict_from_link` para obtener el género estimado, los vecinos más cercanos y las rutas locales asociadas.
