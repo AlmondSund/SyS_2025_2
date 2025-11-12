@@ -30,46 +30,50 @@ SECTION_DEFS = [
         "label": "Presentación",
         "start": "### **TALLER #2 SEÑALES Y SISTEMAS - 2025 2S**",
         "end": "### **1. Transformada de Fourier**",
-        "level": 0,
-    },
-    {
-        "key": "sec1_intro",
-        "label": "1. Transformada de Fourier",
-        "start": "### **1. Transformada de Fourier**",
-        "end": "#### **1.1.",
-        "level": 0,
     },
     {
         "key": "sec1_1",
         "label": "1.1. Consultar y realizar los ejercicios propuestos",
         "start": "#### **1.1.",
         "end": "#### **1.2.",
-        "level": 1,
     },
     {
         "key": "sec1_2",
         "label": "1.2. Semejanzas y diferencias entre series/transformadas",
         "start": "#### **1.2.",
         "end": "#### **1.3.",
-        "level": 1,
     },
     {
         "key": "sec1_3",
         "label": "1.3. Función de densidad espectral",
         "start": "#### **1.3.",
         "end": "#### **1.4.",
-        "level": 1,
     },
     {
         "key": "sec1_4",
         "label": "1.4. Aplicación de propiedades",
         "start": "#### **1.4.",
         "end": None,
-        "level": 1,
     },
 ]
 
 SECTION_INDEX = {item["key"]: item for item in SECTION_DEFS}
+DEFAULT_SECTION_KEY = SECTION_DEFS[0]["key"]
+
+NAV_STRUCTURE = [
+    {
+        "type": "section",
+        "label": SECTION_INDEX["presentacion"]["label"],
+        "section_key": "presentacion",
+        "children": [],
+    },
+    {
+        "type": "group",
+        "label": "1. Transformada de Fourier",
+        "section_key": None,
+        "children": ["sec1_1", "sec1_2", "sec1_3", "sec1_4"],
+    },
+]
 
 
 st.set_page_config(page_title="Taller 2 - Señales y Sistemas", layout="wide", page_icon="📈")
@@ -83,6 +87,68 @@ def _extract_section(text: str, start: str, end: str | None) -> str:
     if end_idx == -1:
         end_idx = len(text)
     return text[start_idx:end_idx].strip()
+
+
+def _ensure_nav_selected():
+    if "nav_selected" not in st.session_state or st.session_state["nav_selected"] not in SECTION_INDEX:
+        st.session_state["nav_selected"] = DEFAULT_SECTION_KEY
+
+
+def render_navigation_tree() -> str:
+    """Emula el panel de navegación de un PDF con expanders por título."""
+    _ensure_nav_selected()
+    selected = st.session_state["nav_selected"]
+
+    st.sidebar.markdown(
+        """
+        <style>
+        div[data-testid="stSidebar"] button {
+            width: 100%;
+            justify-content: flex-start;
+            text-align: left;
+            padding-left: 0.4rem;
+            background-color: transparent;
+            color: inherit;
+            border: none;
+        }
+        div[data-testid="stSidebar"] button:hover {
+            background-color: rgba(255, 255, 255, 0.08);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    nav_container = st.sidebar.container()
+    for node in NAV_STRUCTURE:
+        if node["type"] == "section":
+            sec_key = node["section_key"]
+            is_selected = selected == sec_key
+            prefix = "▣ " if is_selected else "▢ "
+            if nav_container.button(
+                f"{prefix}{node['label']}",
+                key=f"btn-{sec_key}",
+                use_container_width=True,
+            ):
+                st.session_state["nav_selected"] = sec_key
+                selected = sec_key
+        elif node["type"] == "group":
+            child_keys = node.get("children", [])
+            expanded_default = selected in child_keys
+            with nav_container.expander(node["label"], expanded=expanded_default):
+                for child_key in child_keys:
+                    child_label = SECTION_INDEX[child_key]["label"]
+                    prefix = "▣ " if selected == child_key else "▢ "
+                    if st.button(
+                        f"{prefix}{child_label}",
+                        key=f"btn-{child_key}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["nav_selected"] = child_key
+                        selected = child_key
+
+    st.sidebar.caption("Colapsa o expande cada título como en el panel de un PDF.")
+    return selected
 
 
 @st.cache_resource
@@ -322,20 +388,7 @@ def main():
         return
 
     st.sidebar.title("Navegación")
-    nav_options = [entry["key"] for entry in SECTION_DEFS]
-
-    def _format_option(key: str) -> str:
-        entry = SECTION_INDEX[key]
-        indent = "\u2003" * entry["level"]  # em-space for visual hierarchy
-        return f"{indent}{entry['label']}"
-
-    section_choice = st.sidebar.radio(
-        "Selecciona una sección",
-        nav_options,
-        format_func=_format_option,
-        index=0,
-    )
-    st.sidebar.caption("La jerarquía respeta la numeración 1, 1.1, 1.2, 1.3, 1.4 del cuaderno.")
+    section_choice = render_navigation_tree()
 
     section_text = sections.get(section_choice, "")
     if section_text:
