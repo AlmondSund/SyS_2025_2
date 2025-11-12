@@ -78,7 +78,13 @@ class KNNSpectralClassifier:
         if self.X is None or not self.labels:
             raise RuntimeError("El clasificador no ha sido entrenado.")
 
-    def predict(self, path_or_url: str, k: Optional[int] = None) -> Tuple[str, List[Dict[str, Any]], Dict[str, float], str]:
+    def predict(
+        self,
+        path_or_url: str,
+        k: Optional[int] = None,
+        *,
+        return_context: bool = False,
+    ) -> Tuple[Any, ...]:
         self._ensure_ready()
         k = k or self.cfg.k
         feat, meta = extract_feature_vector(path_or_url, self.cfg)
@@ -92,6 +98,7 @@ class KNNSpectralClassifier:
 
         neighbors = [
             {
+                "index": int(i),
                 "label": self.labels[i],
                 "distance": float(dists[i]),
                 "path": self.paths[i],
@@ -107,7 +114,15 @@ class KNNSpectralClassifier:
         tied = [label for label, count in votes.items() if count == best_vote]
         pred = tied[0] if len(tied) == 1 else neighbors[0]["label"]
         probs = {label: votes[label] / len(neighbors) for label in votes}
-        return pred, neighbors, probs, resolved_path
+        if not return_context:
+            return pred, neighbors, probs, resolved_path
+
+        context = {
+            "feature_vector": feat,
+            "neighbor_indices": [int(i) for i in sorted_idx],
+            "distance_vector": dists,
+        }
+        return pred, neighbors, probs, resolved_path, context
 
     def save(self, path: str) -> None:
         self._ensure_ready()

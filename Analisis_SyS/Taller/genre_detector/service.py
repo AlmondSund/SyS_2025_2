@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .knn import KNNSpectralClassifier
 from .pipeline import auto_fit_and_save, classify_with_model
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -50,3 +51,15 @@ def predict_from_link(
 ) -> Dict[str, Any]:
     model_path = ensure_default_model(force_retrain=force_retrain, cfg_overrides=cfg_overrides)
     return classify_with_model(str(model_path), link, k=k)
+
+
+def load_default_classifier(
+    *,
+    cfg_overrides: Optional[Dict[str, Any]] = None,
+    force_retrain: bool = False,
+) -> KNNSpectralClassifier:
+    """Ensure the default artifacts exist and return a loaded classifier."""
+    model_path = ensure_default_model(force_retrain=force_retrain, cfg_overrides=cfg_overrides)
+    clf = KNNSpectralClassifier()
+    clf.load(str(model_path))
+    return clf

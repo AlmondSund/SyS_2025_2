@@ -1,0 +1,3 @@
+# Ignore every cached audio artifact in this directory
+*
+!.gitignore
