@@ -6,3 +6,4 @@ sympy
 scipy
 pydub
 yt-dlp
+audioop-lts; python_version>="3.13"
