@@ -19,6 +19,11 @@ import sympy.physics.control as ctrl
 from scipy.fft import fft, fftfreq
 from scipy.io.wavfile import write as wav_write
 
+import pydub
+import yt_dlp
+from pydub import AudioSegment
+from yt_dlp import YoutubeDL
+'''
 try:  # Optional imports for audio acquisition
     from pydub import AudioSegment
 except ImportError:  # pragma: no cover - shown to the user in the UI
@@ -28,7 +33,7 @@ try:
     from yt_dlp import YoutubeDL
 except ImportError:  # pragma: no cover - shown to the user in the UI
     YoutubeDL = None
-
+'''
 
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = BASE_DIR / "cache"
