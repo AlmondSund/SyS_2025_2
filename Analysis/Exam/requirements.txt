@@ -1,0 +1,8 @@
+streamlit
+matplotlib
+numpy
+pandas
+sympy
+scipy
+pydub
+yt-dlp
