@@ -6,3 +6,4 @@ sympy
 scipy
 pydub
 yt-dlp
+ffmpeg
