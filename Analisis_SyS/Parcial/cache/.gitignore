@@ -1,0 +1,3 @@
+# Ignore every cached artifact in this directory
+*
+!.gitignore
