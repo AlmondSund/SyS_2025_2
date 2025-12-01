@@ -266,7 +266,7 @@ def render_am_panel() -> None:
         time_frequency_plot(
             msg_t,
             f_s,
-            labels={"title": "Message signal", "t_leyend": "message(t)", "f_leyend": "|M(f)|"},
+            labels={"title": "Original message", "t_leyend": "$m(t)$", "f_leyend": "$M(f)$"},
         )
     )
 
@@ -281,28 +281,49 @@ def render_am_panel() -> None:
         if clean_cache:
             clear_cache()
 
+    t_axis = np.arange(len(msg_t)) / f_s
+    carrier_t = np.cos(2 * np.pi * carrier * t_axis)
     am_t = am_modulate(msg_t, f_s, carrier_hz=carrier, modulation_index=modulation_index)
+    mixed_t = 2 * am_t * np.cos(2 * np.pi * carrier * t_axis)
     demod_t = am_demodulate(am_t, f_s, carrier_hz=carrier, cutoff_hz=float(cutoff))
 
     col_mod, col_demod = st.columns(2)
     with col_mod:
+        st.markdown("**Carrier**")
+        st.pyplot(
+            time_frequency_plot(
+                carrier_t,
+                f_s,
+                labels={"title": "Carrier Signal", "t_leyend": "$c(t)$", "f_leyend": "$C(f)$"},
+            )
+        )
+
         st.markdown("**AM (DSB-SC) signal**")
         st.audio(to_wav_bytes(am_t / (np.max(np.abs(am_t)) + 1e-9), f_s), format="audio/wav")
         st.pyplot(
             time_frequency_plot(
                 am_t,
                 f_s,
-                labels={"title": "AM signal", "t_leyend": "am(t)", "f_leyend": "|S(f)|"},
+                labels={"title": "AM Modulated Signal", "t_leyend": "$s(t)$", "f_leyend": "$S(f)$"},
             )
         )
     with col_demod:
+        st.markdown("**Mixer output (before LPF)**")
+        st.pyplot(
+            time_frequency_plot(
+                mixed_t,
+                f_s,
+                labels={"title": "Mixer Output", "t_leyend": "$2s(t)\\cos(2\\pi f_c t)$", "f_leyend": "$|Mixed(f)|$"},
+            )
+        )
+
         st.markdown("**Demodulated (coherent + ideal LPF)**")
         st.audio(to_wav_bytes(demod_t / (np.max(np.abs(demod_t)) + 1e-9), f_s), format="audio/wav")
         st.pyplot(
             time_frequency_plot(
                 demod_t,
                 f_s,
-                labels={"title": "Demodulated signal", "t_leyend": "demod(t)", "f_leyend": "|D(f)|"},
+                labels={"title": "Demodulated Message Signal", "t_leyend": "$\\hat{m}(t)$", "f_leyend": "$\\hat{M}(f)$"},
             )
         )
 
