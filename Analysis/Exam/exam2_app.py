@@ -291,6 +291,7 @@ def render_am_panel() -> None:
     col_mod, col_demod = st.columns(2)
     with col_mod:
         st.markdown("**Carrier**")
+        st.audio(to_wav_bytes(carrier_t.astype(np.float32), f_s), format="audio/wav")
         st.pyplot(
             time_frequency_plot(
                 carrier_t,
@@ -310,6 +311,7 @@ def render_am_panel() -> None:
         )
     with col_demod:
         st.markdown("**Mixer output (before LPF)**")
+        st.audio(to_wav_bytes(mixed_t / (np.max(np.abs(mixed_t)) + 1e-9), f_s), format="audio/wav")
         st.pyplot(
             time_frequency_plot(
                 mixed_t,
