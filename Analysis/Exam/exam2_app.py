@@ -65,7 +65,7 @@ def time_frequency_plot(signal: np.ndarray, f_s: int, labels: Optional[dict[str,
     axes[0].grid(True)
     axes[0].set_title("Time domain")
     if t_leyend:
-        axes[0].legend()
+        axes[0].legend(loc="upper right")
 
     freq_plot_kwargs = {"color": "tab:red"}
     if f_leyend:
@@ -78,7 +78,7 @@ def time_frequency_plot(signal: np.ndarray, f_s: int, labels: Optional[dict[str,
     axes[1].grid(True)
     axes[1].set_title("Frequency domain")
     if f_leyend:
-        axes[1].legend()
+        axes[1].legend(loc="upper right")
 
     if title:
         fig.tight_layout(rect=[0, 0, 1, 0.95])
