@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -453,11 +454,14 @@ def plot_case(tf: ctrl.TransferFunction, label: str, horizon: float, freq_exp: T
     fig, axs = plt.subplots(3, 2, figsize=(12, 9))
     fig.suptitle(label, fontsize=13)
 
+    log_formatter = mticker.FuncFormatter(lambda val, _: f"{val:g}")
+
     axs[0, 0].semilogx(w, mag_db, color="C0")
     axs[0, 0].set_ylabel("Magnitude [dB]")
     axs[0, 0].set_title("Bode magnitude")
     axs[0, 0].grid(True, which="both")
     axs[0, 0].set_xlim(w[0], w[-1])
+    axs[0, 0].xaxis.set_major_formatter(log_formatter)
 
     axs[1, 0].semilogx(w, phase_deg, color="C1")
     axs[1, 0].set_ylabel("Phase [deg]")
@@ -465,6 +469,7 @@ def plot_case(tf: ctrl.TransferFunction, label: str, horizon: float, freq_exp: T
     axs[1, 0].set_title("Bode phase")
     axs[1, 0].grid(True, which="both")
     axs[1, 0].set_xlim(w[0], w[-1])
+    axs[1, 0].xaxis.set_major_formatter(log_formatter)
 
     ax_pz = axs[2, 0]
     if zeros:
