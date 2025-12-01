@@ -212,7 +212,7 @@ def render_am_panel() -> None:
     with col_left:
         source = st.radio(
             "Message source",
-            ["Cached snippet", "YouTube URL", "Upload file"],
+            ["Cached snippet", "Upload file"],
             index=0,
             help="Cached snippet uses the sample already downloaded in cache/DraDpi4bM-Y.webm",
         )
@@ -221,11 +221,8 @@ def render_am_panel() -> None:
         duration_s = st.slider("Duration [s]", min_value=1.0, max_value=10.0, value=5.0, step=0.5)
         sample_rate = st.selectbox("Sample rate [Hz]", [22050, 32000, 44100, 48000], index=2)
 
-    url = ""
     uploaded = None
-    if source == "YouTube URL":
-        url = st.text_input("YouTube link", value="https://www.youtube.com/watch?v=DraDpi4bM-Y")
-    elif source == "Upload file":
+    if source == "Upload file":
         uploaded = st.file_uploader("Upload audio (any ffmpeg-compatible type)", type=None)
 
     load_button = st.button("Load/refresh message segment", type="primary")
@@ -237,16 +234,13 @@ def render_am_panel() -> None:
             if source == "Cached snippet":
                 samples, sr = cached_file_audio(DEFAULT_AUDIO, start_s, duration_s, sample_rate)
                 label = "Cached snippet"
-            elif source == "YouTube URL":
-                if not url:
-                    raise ValueError("Provide a valid YouTube URL.")
-                samples, sr, audio_path = cached_youtube_audio(url, start_s, duration_s, sample_rate, clean_cache=False)
-                label = f"YouTube ({audio_path.name})"
-            else:
+            elif source == "Upload file":
                 if uploaded is None:
                     raise ValueError("Upload an audio file to proceed.")
                 samples, sr = cached_upload_audio(uploaded.getvalue(), start_s, duration_s, sample_rate)
                 label = f"Uploaded: {uploaded.name}"
+            else:
+                raise ValueError("Unsupported source selection.")
             st.session_state.msg_payload = {"samples": samples, "fs": sr, "label": label}
             st.success(f"Loaded message from {label}")
         except Exception as exc:  # pragma: no cover - user feedback path
