@@ -33,8 +33,16 @@ plt.style.use("seaborn-v0_8")
 
 
 # ---------- Shared utilities ----------
-def time_frequency_plot(signal: np.ndarray, f_s: int, title: str = "") -> plt.Figure:
+def time_frequency_plot(signal: np.ndarray, f_s: int, labels: Optional[dict[str, str]] = None) -> plt.Figure:
     """Return a time/frequency matplotlib figure for a real-valued signal."""
+    if labels is not None:
+        expected_keys = {"title", "t_leyend", "f_leyend"}
+        if not isinstance(labels, dict) or not expected_keys.issuperset(labels.keys()):
+            raise ValueError("labels must be a dict with keys 'title', 't_leyend', 'f_leyend'")
+    title = labels.get("title") if labels else None
+    t_leyend = labels.get("t_leyend") if labels else None
+    f_leyend = labels.get("f_leyend") if labels else None
+
     N = len(signal)
     if N == 0:
         raise ValueError("Signal is empty.")
@@ -44,21 +52,37 @@ def time_frequency_plot(signal: np.ndarray, f_s: int, title: str = "") -> plt.Fi
     freqs = fftfreq(N, T_s)[: N // 2]
 
     fig, axes = plt.subplots(2, 1, figsize=(8, 6), sharex=False)
-    fig.suptitle(title or "Time and frequency domains")
+    if title:
+        fig.suptitle(title)
 
-    axes[0].plot(t, signal, color="tab:blue")
+    time_plot_kwargs = {"color": "tab:blue"}
+    if t_leyend:
+        time_plot_kwargs["label"] = t_leyend
+
+    axes[0].plot(t, signal, **time_plot_kwargs)
     axes[0].set_ylabel("Amplitude")
     axes[0].grid(True)
     axes[0].set_title("Time domain")
+    if t_leyend:
+        axes[0].legend()
 
-    axes[1].plot(freqs, 2.0 / N * np.abs(spectrum[: N // 2]), color="tab:red")
+    freq_plot_kwargs = {"color": "tab:red"}
+    if f_leyend:
+        freq_plot_kwargs["label"] = f_leyend
+
+    axes[1].plot(freqs, 2.0 / N * np.abs(spectrum[: N // 2]), **freq_plot_kwargs)
     axes[1].set_xlabel("Frequency [Hz]")
     axes[1].set_ylabel("Magnitude")
     axes[1].set_xlim(0, freqs[-1])
     axes[1].grid(True)
     axes[1].set_title("Frequency domain")
+    if f_leyend:
+        axes[1].legend()
 
-    fig.tight_layout()
+    if title:
+        fig.tight_layout(rect=[0, 0, 1, 0.95])
+    else:
+        fig.tight_layout()
     return fig
 
 
@@ -238,7 +262,13 @@ def render_am_panel() -> None:
 
     st.subheader("Message")
     st.audio(to_wav_bytes(msg_t, f_s), format="audio/wav")
-    st.pyplot(time_frequency_plot(msg_t, f_s, title="Message signal"))
+    st.pyplot(
+        time_frequency_plot(
+            msg_t,
+            f_s,
+            labels={"title": "Message signal", "t_leyend": "message(t)", "f_leyend": "|M(f)|"},
+        )
+    )
 
     st.subheader("Modulation and demodulation")
     col1, col2 = st.columns(2)
@@ -258,11 +288,23 @@ def render_am_panel() -> None:
     with col_mod:
         st.markdown("**AM (DSB-SC) signal**")
         st.audio(to_wav_bytes(am_t / (np.max(np.abs(am_t)) + 1e-9), f_s), format="audio/wav")
-        st.pyplot(time_frequency_plot(am_t, f_s, title="AM signal"))
+        st.pyplot(
+            time_frequency_plot(
+                am_t,
+                f_s,
+                labels={"title": "AM signal", "t_leyend": "am(t)", "f_leyend": "|S(f)|"},
+            )
+        )
     with col_demod:
         st.markdown("**Demodulated (coherent + ideal LPF)**")
         st.audio(to_wav_bytes(demod_t / (np.max(np.abs(demod_t)) + 1e-9), f_s), format="audio/wav")
-        st.pyplot(time_frequency_plot(demod_t, f_s, title="Demodulated signal"))
+        st.pyplot(
+            time_frequency_plot(
+                demod_t,
+                f_s,
+                labels={"title": "Demodulated signal", "t_leyend": "demod(t)", "f_leyend": "|D(f)|"},
+            )
+        )
 
     st.markdown(
         """
