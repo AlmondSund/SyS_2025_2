@@ -6,12 +6,10 @@ It covers AM modulation/demodulation and the mass–spring–damper to RLC study
 from __future__ import annotations
 
 import io
-import math
 from pathlib import Path
 from typing import Optional, Tuple
 
 import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -335,258 +333,308 @@ leaving a scaled copy of the message.
 
 
 # ---------- Mechanical and RLC study ----------
-s = sp.symbols("s")
+s = sp.symbols("s", complex=True)
+w_n, zeta, K = sp.symbols("w_n zeta K", real=True, positive=True)
 
 
-def mechanical_tf(m: float, c: float, k: float) -> ctrl.TransferFunction:
-    return ctrl.TransferFunction(1, sp.expand(m * s**2 + c * s + k), s)
+def get_electric_params(mechanical_params: dict[str, float]) -> dict[str, float]:
+    """Convert mass-spring-damper params to their RLC analog."""
+    required = {"m", "c", "k"}
+    missing = required.difference(mechanical_params)
+    if missing:
+        raise KeyError(f"Missing parameters: {', '.join(sorted(missing))}")
+
+    m = float(mechanical_params["m"])
+    c = float(mechanical_params["c"])
+    k = float(mechanical_params["k"])
+    if k == 0:
+        raise ValueError("k must be non-zero to compute capacitance")
+
+    return {"R": c, "L": m, "C": 1.0 / k}
 
 
-def electrical_equivalent(m: float, c: float, k: float) -> dict:
-    return {"R": float(c), "L": float(m), "C": float(1.0 / k)}
+def get_mechanical_params(electric_params: dict[str, float]) -> dict[str, float]:
+    """Convert RLC params to their mass-spring-damper analog."""
+    required = {"R", "L", "C"}
+    missing = required.difference(electric_params)
+    if missing:
+        raise KeyError(f"Missing parameters: {', '.join(sorted(missing))}")
+
+    R = float(electric_params["R"])
+    L = float(electric_params["L"])
+    C = float(electric_params["C"])
+    if C == 0:
+        raise ValueError("C must be non-zero to compute stiffness")
+
+    return {"m": L, "c": R, "k": 1.0 / C}
 
 
-def denominator_coeffs(tf: ctrl.TransferFunction) -> Tuple[float, float, float]:
-    den_poly = sp.Poly(sp.expand(tf.den), tf.var)
-    coeffs = [float(sp.N(c)) for c in den_poly.all_coeffs()]
-    if len(coeffs) != 3:
-        raise ValueError("The model is not second order.")
-    return coeffs[0], coeffs[1], coeffs[2]
+def get_standard_params(params: dict[str, float]) -> dict[str, float]:
+    """Return standard second-order parameters (w_n, zeta, K)."""
+    mechanical_keys = {"m", "c", "k"}
+    electrical_keys = {"R", "L", "C"}
 
-
-def natural_quantities(a0: float, a1: float, a2: float) -> Tuple[float, float, float]:
-    wn = float(np.sqrt(a2 / a0))
-    zeta = float(a1 / (2 * np.sqrt(a0 * a2)))
-    if abs(zeta - 1.0) < 1e-10:
-        wd = 0.0
-    elif zeta < 1.0:
-        wd = float(wn * math.sqrt(1.0 - zeta**2))
+    if mechanical_keys.issubset(params):
+        mechanical = {key: float(params[key]) for key in ("m", "c", "k")}
+    elif electrical_keys.issubset(params):
+        mechanical = get_mechanical_params(params)
     else:
-        wd = float("nan")
-    return wn, zeta, wd
+        raise KeyError("params must contain either {'m', 'c', 'k'} or {'R', 'L', 'C'}")
+
+    m = mechanical["m"]
+    c = mechanical["c"]
+    k = mechanical["k"]
+    if m == 0 or k == 0:
+        raise ValueError("m and k must be non-zero to compute standard parameters")
+
+    wn_val = float(np.sqrt(k / m))
+    zeta_val = float(c / (2 * np.sqrt(m * k)))
+    K_val = float(1.0 / k)
+    return {"w_n": wn_val, "zeta": zeta_val, "K": K_val}
 
 
-def closed_loop_unity(tf: ctrl.TransferFunction) -> ctrl.TransferFunction:
-    return ctrl.TransferFunction(tf.num, sp.simplify(tf.den + tf.num), tf.var)
+def classify_damping(standard_params: dict[str, float]) -> str:
+    """Return the damping type based on zeta."""
+    required = {"w_n", "zeta", "K"}
+    missing = required.difference(standard_params)
+    if missing:
+        raise KeyError(f"Missing parameters: {', '.join(sorted(missing))}")
+
+    zeta_val = float(standard_params["zeta"])
+    eps = 1e-6
+    if abs(zeta_val - 1.0) <= eps:
+        return "critically damped"
+    if zeta_val < 1.0:
+        return "underdamped"
+    return "overdamped"
 
 
-def choose_time_window(wn: float, zeta: float) -> float:
+def symbolic_transfer_function(closed_loop: bool = False) -> Tuple[sp.Expr, list[sp.Expr]]:
+    """Return the symbolic transfer function and its poles."""
+    H_open = (K * w_n**2) / (s**2 + 2 * zeta * w_n * s + w_n**2)
+    H = sp.simplify(H_open / (1 + H_open)) if closed_loop else sp.simplify(H_open)
+
+    denom = sp.denom(sp.together(H))
+    poles = sp.solve(sp.Eq(denom, 0), s)
+    return H, poles
+
+
+def get_time_response_metrics(poles: list[sp.Expr], responses: dict[str, bool], standard_params: dict[str, float]) -> pd.DataFrame:
+    """Return key time-domain metrics for the specified response type."""
+    required_params = {"w_n", "zeta", "K"}
+    missing_params = required_params.difference(standard_params)
+    if missing_params:
+        raise KeyError(f"Missing parameters: {', '.join(sorted(missing_params))}")
+
+    expected_responses = {"impulse", "step", "ramp"}
+    if set(responses.keys()) != expected_responses:
+        raise KeyError("responses must contain the keys 'impulse', 'step', and 'ramp'")
+
+    active = [k for k, v in responses.items() if v]
+    if len(active) != 1:
+        raise ValueError("Exactly one response type must be set to True")
+
+    if len(poles) != 2:
+        raise ValueError("poles must contain exactly two elements [p1, p2]")
+
+    w_n_val = float(standard_params["w_n"])
+    zeta_val = float(standard_params["zeta"])
+    K_val = float(standard_params["K"])
+    w_d_val = w_n_val * np.sqrt(max(1 - zeta_val**2, 0.0))
+
+    data = {"w_n": w_n_val, "zeta": zeta_val, "w_d": w_d_val}
+
+    if active[0] == "step" and zeta_val < 1.0:
+        import cmath
+
+        subs = {w_n: w_n_val, zeta: zeta_val, K: K_val}
+        p1 = complex(sp.N(poles[0].subs(subs)))
+        p2 = complex(sp.N(poles[1].subs(subs)))
+        diff = p1 - p2
+        T_r = np.inf if diff == 0 else (1.0 / diff) * cmath.log(p1 / p2, cmath.e).real
+
+        T_p = np.inf if w_d_val == 0 else np.pi / w_d_val
+        T_s = np.inf if zeta_val == 0 else 4.0 / (zeta_val * w_n_val)
+
+        data.update({"T_p": T_p, "T_r": T_r, "T_s": T_s})
+
+    return pd.DataFrame([data])
+
+
+def choose_time_window(wn: float, zeta_val: float) -> float:
     base = max(8.0 / max(wn, 1e-6), 0.4)
-    if zeta < 0.4:
+    if zeta_val < 0.4:
         base *= 2.0
-    elif zeta > 1.2:
+    elif zeta_val > 1.2:
         base *= 0.8
     return float(base)
 
 
-def step_time_metrics(tf: ctrl.TransferFunction, horizon: float, target: Optional[float] = None) -> Tuple[float, float, float, float]:
-    t, y = ctrl.step_response_numerical_data(tf, upper_limit=horizon, adaptive=False, n=600)
-    t_arr = np.asarray(t, dtype=float)
-    y_arr = np.asarray(y, dtype=float)
-    final_val = float(target if target is not None else y_arr[-1])
-    rise_time = math.nan
-    idx10 = np.where(y_arr >= 0.1 * final_val)[0]
-    idx90 = np.where(y_arr >= 0.9 * final_val)[0]
-    if idx10.size and idx90.size:
-        rise_time = float(t_arr[idx90[0]] - t_arr[idx10[0]])
-    peak_idx = int(np.argmax(y_arr))
-    peak_time = float(t_arr[peak_idx])
-    band = 0.02 * max(abs(final_val), 1e-6)
-    settling_time = math.nan
-    for i in range(len(y_arr)):
-        if np.all(np.abs(y_arr[i:] - final_val) <= band):
-            settling_time = float(t_arr[i])
-            break
-    return rise_time, peak_time, settling_time, final_val
+def instantiate_transfer_function(standard_params: dict[str, float], closed_loop: bool) -> Tuple[ctrl.TransferFunction, list[sp.Expr], dict]:
+    """Create a control.TransferFunction from the symbolic expression."""
+    H_sym, poles_sym = symbolic_transfer_function(closed_loop=closed_loop)
+    subs = {w_n: standard_params["w_n"], zeta: standard_params["zeta"], K: standard_params["K"]}
+    H_eval = sp.simplify(H_sym.subs(subs))
+    num_expr, den_expr = sp.fraction(sp.together(H_eval))
+    tf_obj = ctrl.TransferFunction(num_expr, den_expr, s)
+    return tf_obj, poles_sym, subs
 
 
-def collect_metrics(label: str, tf: ctrl.TransferFunction, loop_label: str, m: float, c: float, k: float, equivalents: dict):
-    a0, a1, a2 = denominator_coeffs(tf)
-    wn, zeta, wd = natural_quantities(a0, a1, a2)
-    time_window = choose_time_window(wn, zeta)
-    dc_gain = float(sp.N(tf.num.subs(tf.var, 0) / tf.den.subs(tf.var, 0)))
-    rise_time, peak_time, settling_time, final_val = step_time_metrics(tf, time_window, target=dc_gain)
-    metrics = {
-        "Scenario": label,
-        "Loop": loop_label,
-        "m": m,
-        "c": c,
-        "k": k,
-        "den_a0": a0,
-        "den_a1": a1,
-        "den_a2": a2,
-        "zeta": zeta,
-        "wn_rad_s": wn,
-        "wd_rad_s": wd,
-        "peak_time_s": peak_time,
-        "rise_time_s": rise_time,
-        "settling_time_s": settling_time,
-        "dc_gain": dc_gain,
-        "R": equivalents["R"],
-        "L": equivalents["L"],
-        "C": equivalents["C"],
-    }
-    return metrics, time_window
+def bode_figure(system: ctrl.TransferFunction, freq_decades: Tuple[int, int]) -> plt.Figure:
+    """Use the control API to create a Bode plot figure."""
+    plt.figure(figsize=(8, 6))
+    ctrl.bode_plot(system, initial_exp=freq_decades[0], final_exp=freq_decades[1], grid=True, show_axes=False, show=False)
+    fig = plt.gcf()
+    fig.tight_layout()
+    return fig
 
 
-def frequency_response(tf: ctrl.TransferFunction, w: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    H_expr = sp.simplify(tf.num / tf.den)
-    H_fun = sp.lambdify(s, H_expr, "numpy")
-    Hw = H_fun(1j * w)
-    mag_db = 20.0 * np.log10(np.abs(Hw))
-    phase_deg = np.unwrap(np.angle(Hw)) * 180.0 / np.pi
-    return mag_db, phase_deg
+def pole_zero_figure(system: ctrl.TransferFunction) -> plt.Figure:
+    """Use the control API to create a pole-zero plot figure."""
+    plt.figure(figsize=(5.5, 5.5))
+    ctrl.pole_zero_plot(system, grid=True, show_axes=True, show=False)
+    fig = plt.gcf()
+    fig.tight_layout()
+    return fig
 
 
-def plot_case(tf: ctrl.TransferFunction, label: str, horizon: float, freq_exp: Tuple[float, float] = (-2, 3)) -> plt.Figure:
-    w = np.logspace(freq_exp[0], freq_exp[1], 400)
-    mag_db, phase_deg = frequency_response(tf, w)
-    t_imp, imp = ctrl.impulse_response_numerical_data(tf, upper_limit=horizon, adaptive=False, n=400)
-    t_step, step = ctrl.step_response_numerical_data(tf, upper_limit=horizon, adaptive=False, n=400)
-    t_ramp, ramp = ctrl.ramp_response_numerical_data(tf, upper_limit=horizon, adaptive=False, n=400)
-    poles = [complex(p) for p in tf.poles()]
-    zeros = [complex(z) for z in tf.zeros()]
+def time_response_figure(system: ctrl.TransferFunction, response: str, horizon: float) -> plt.Figure:
+    """Plot impulse/step/ramp responses using control API numerical data."""
+    response_key = response.lower()
+    if response_key == "impulse":
+        t, y = ctrl.impulse_response_numerical_data(system, upper_limit=horizon, adaptive=False, n=600)
+        title = "Impulse response"
+    elif response_key == "step":
+        t, y = ctrl.step_response_numerical_data(system, upper_limit=horizon, adaptive=False, n=600)
+        title = "Step response"
+    else:
+        t, y = ctrl.ramp_response_numerical_data(system, upper_limit=horizon, adaptive=False, n=600)
+        title = "Ramp response"
 
-    fig, axs = plt.subplots(3, 2, figsize=(12, 9))
-    fig.suptitle(label, fontsize=13)
-
-    log_formatter = mticker.FuncFormatter(lambda val, _: f"{val:g}")
-
-    axs[0, 0].semilogx(w, mag_db, color="C0")
-    axs[0, 0].set_ylabel("Magnitude [dB]")
-    axs[0, 0].set_title("Bode magnitude")
-    axs[0, 0].grid(True, which="both")
-    axs[0, 0].set_xlim(w[0], w[-1])
-    axs[0, 0].xaxis.set_major_formatter(log_formatter)
-
-    axs[1, 0].semilogx(w, phase_deg, color="C1")
-    axs[1, 0].set_ylabel("Phase [deg]")
-    axs[1, 0].set_xlabel("Frequency [rad/s]")
-    axs[1, 0].set_title("Bode phase")
-    axs[1, 0].grid(True, which="both")
-    axs[1, 0].set_xlim(w[0], w[-1])
-    axs[1, 0].xaxis.set_major_formatter(log_formatter)
-
-    ax_pz = axs[2, 0]
-    if zeros:
-        ax_pz.scatter([z.real for z in zeros], [z.imag for z in zeros], marker="o", facecolors="none", edgecolors="tab:orange", label="Zeros")
-    if poles:
-        ax_pz.scatter([p.real for p in poles], [p.imag for p in poles], marker="x", color="tab:blue", label="Poles")
-    max_range = max(
-        [abs(v) for v in ([z.real for z in zeros] + [z.imag for z in zeros] + [p.real for p in poles] + [p.imag for p in poles])],
-        default=1.0,
-    )
-    limit = max(1.0, max_range * 1.2)
-    ax_pz.axhline(0, color="grey", linewidth=0.8)
-    ax_pz.axvline(0, color="grey", linewidth=0.8)
-    ax_pz.set_xlim(-limit, limit)
-    ax_pz.set_ylim(-limit, limit)
-    ax_pz.set_title("Pole-zero map")
-    ax_pz.set_xlabel("Re{s}")
-    ax_pz.set_ylabel("Im{s}")
-    ax_pz.grid(True)
-    if zeros or poles:
-        ax_pz.legend(loc="best")
-
-    axs[0, 1].plot(t_imp, imp, color="C2")
-    axs[0, 1].set_title("Impulse response")
-    axs[0, 1].set_ylabel("Amplitude")
-    axs[0, 1].grid(True)
-
-    axs[1, 1].plot(t_step, step, color="C3")
-    axs[1, 1].set_title("Step response")
-    axs[1, 1].set_ylabel("Amplitude")
-    axs[1, 1].grid(True)
-
-    axs[2, 1].plot(t_ramp, ramp, color="C4")
-    axs[2, 1].set_title("Ramp response")
-    axs[2, 1].set_ylabel("Amplitude")
-    axs[2, 1].set_xlabel("Time [s]")
-    axs[2, 1].grid(True)
-
-    fig.tight_layout(rect=[0, 0, 1, 0.95])
+    fig, ax = plt.subplots(figsize=(7.5, 3.5))
+    ax.plot(t, y, color="C3")
+    ax.set_xlabel("Time [s]")
+    ax.set_ylabel("Amplitude")
+    ax.set_title(title)
+    ax.grid(True, ls="--", lw=0.6)
+    fig.tight_layout()
     return fig
 
 
 def render_mechanical_panel() -> None:
     st.header("2) Mass–spring–damper ⇄ RLC study")
 
+    images = []
     if (BASE_DIR / "spring-mass-damper.png").exists():
-        st.image(str(BASE_DIR / "spring-mass-damper.png"), width=420)
+        images.append(str(BASE_DIR / "spring-mass-damper.png"))
     if (BASE_DIR / "rlc-system.png").exists():
-        st.image(str(BASE_DIR / "rlc-system.png"), width=420)
+        images.append(str(BASE_DIR / "rlc-system.png"))
+    if images:
+        st.image(images, width=400)
 
     st.markdown(
         """
 Transfer function: $G(s)=\\dfrac{1}{ms^2+cs+k}$ with the force–voltage mapping $L=m$, $R=c$, $C=1/k$.
-Closed loop uses unity feedback. Use the controls below to explore damping regimes.
+Closed loop uses unity feedback. Choose whether to type mechanical or electrical values; conversions, damping, and plots update automatically.
         """,
         unsafe_allow_html=True,
     )
 
-    presets = {
-        "Underdamped (ζ=0.5)": {"m": 1.0, "c": 10.0, "k": 100.0},
-        "Critically damped (ζ=1)": {"m": 1.0, "c": 20.0, "k": 100.0},
-        "Overdamped (ζ=2)": {"m": 1.0, "c": 40.0, "k": 100.0},
-        "Custom": None,
-    }
-    preset_label = st.selectbox("Preset", list(presets.keys()), index=0)
-    preset_vals = presets[preset_label]
+    input_mode = st.select_slider(
+        "Parameter domain",
+        options=["Mechanical (m, c, k)", "Electrical (R, L, C)"],
+        value="Mechanical (m, c, k)",
+        help="Slide to decide if you want to enter mechanical or electrical values.",
+    )
 
-    col_m, col_c, col_k = st.columns(3)
-    with col_m:
-        m_val = st.number_input("Mass m [kg]", value=preset_vals["m"] if preset_vals else 1.0, min_value=0.1, max_value=10.0, step=0.1)
-    with col_c:
-        c_val = st.number_input("Damping c [N·s/m]", value=preset_vals["c"] if preset_vals else 10.0, min_value=0.1, max_value=80.0, step=1.0)
-    with col_k:
-        k_val = st.number_input("Spring k [N/m]", value=preset_vals["k"] if preset_vals else 100.0, min_value=1.0, max_value=200.0, step=1.0)
+    default_mech = {"m": 1.0, "c": 10.0, "k": 100.0}
+    default_elec = get_electric_params(default_mech)
+
+    if input_mode.startswith("Mechanical"):
+        col_m, col_c, col_k = st.columns(3)
+        with col_m:
+            m_val = st.number_input("Mass m [kg]", value=default_mech["m"], min_value=0.1, max_value=20.0, step=0.1)
+        with col_c:
+            c_val = st.number_input("Damping c [N·s/m]", value=default_mech["c"], min_value=0.1, max_value=120.0, step=0.5)
+        with col_k:
+            k_val = st.number_input("Spring k [N/m]", value=default_mech["k"], min_value=1.0, max_value=400.0, step=1.0)
+        mechanical_params = {"m": m_val, "c": c_val, "k": k_val}
+        electrical_params = get_electric_params(mechanical_params)
+    else:
+        col_R, col_L, col_C = st.columns(3)
+        with col_R:
+            R_val = st.number_input("Resistance R [Ω]", value=default_elec["R"], min_value=0.1, max_value=200.0, step=0.5)
+        with col_L:
+            L_val = st.number_input("Inductance L [H]", value=default_elec["L"], min_value=0.05, max_value=20.0, step=0.05)
+        with col_C:
+            C_val = st.number_input("Capacitance C [F]", value=default_elec["C"], min_value=0.001, max_value=2.0, step=0.001, format="%.4f")
+        electrical_params = {"R": R_val, "L": L_val, "C": C_val}
+        mechanical_params = get_mechanical_params(electrical_params)
+
+    standard_params = get_standard_params(mechanical_params if input_mode.startswith("Mechanical") else electrical_params)
+    damping_label = classify_damping(standard_params)
+    w_d_val = standard_params["w_n"] * np.sqrt(max(1 - standard_params["zeta"] ** 2, 0.0))
+
+    col_mech, col_elec = st.columns(2)
+    with col_mech:
+        st.markdown("**Mechanical parameters**")
+        st.table(pd.DataFrame(mechanical_params, index=["Value"]).T)
+    with col_elec:
+        st.markdown("**Electrical equivalents**")
+        st.table(pd.DataFrame(electrical_params, index=["Value"]).T)
+
+    col_a, col_b, col_c, col_d = st.columns(4)
+    col_a.metric("wn [rad/s]", f"{standard_params['w_n']:.3f}")
+    col_b.metric("zeta", f"{standard_params['zeta']:.3f}")
+    col_c.metric("w_d [rad/s]", f"{w_d_val:.3f}")
+    col_d.metric("Damping", damping_label)
 
     loop_modes = st.multiselect("Systems to display", ["Open-loop", "Closed-loop"], default=["Open-loop", "Closed-loop"])
+    response_choice = st.radio("Time response to plot", ["Impulse", "Step", "Ramp"], index=1, horizontal=True)
+    freq_decades = st.slider("Bode frequency range (powers of 10 rad/s)", -4, 5, value=(-2, 3))
 
-    base_tf = mechanical_tf(m_val, c_val, k_val)
-    eq_vals = electrical_equivalent(m_val, c_val, k_val)
+    if not loop_modes:
+        st.info("Select at least one system to visualize.")
+        return
 
-    rows = []
-    plot_entries = []
-    if "Open-loop" in loop_modes:
-        metrics, window = collect_metrics(preset_label, base_tf, "open-loop", m_val, c_val, k_val, eq_vals)
-        rows.append(metrics)
-        plot_entries.append(("Open-loop", base_tf, window))
-    if "Closed-loop" in loop_modes:
-        closed_tf = closed_loop_unity(base_tf)
-        metrics, window = collect_metrics(preset_label, closed_tf, "closed-loop", m_val, c_val, k_val, eq_vals)
-        rows.append(metrics)
-        plot_entries.append(("Closed-loop", closed_tf, window))
+    response_flags = {
+        "impulse": response_choice == "Impulse",
+        "step": response_choice == "Step",
+        "ramp": response_choice == "Ramp",
+    }
 
-    df = pd.DataFrame(rows)
-    if not df.empty:
-        st.dataframe(
-            df[
-                [
-                    "Scenario",
-                    "Loop",
-                    "zeta",
-                    "wn_rad_s",
-                    "wd_rad_s",
-                    "peak_time_s",
-                    "rise_time_s",
-                    "settling_time_s",
-                    "dc_gain",
-                    "den_a0",
-                    "den_a1",
-                    "den_a2",
-                    "R",
-                    "L",
-                    "C",
-                ]
-            ].round(4),
-            width="stretch",
-        )
+    metrics_frames = []
+    for loop_label in loop_modes:
+        closed_loop = loop_label == "Closed-loop"
+        tf_obj, poles_sym, _ = instantiate_transfer_function(standard_params, closed_loop=closed_loop)
+        horizon = choose_time_window(standard_params["w_n"], standard_params["zeta"])
 
-    for loop_label, tf_obj, window in plot_entries:
         st.divider()
-        st.subheader(f"{loop_label} responses")
-        st.pyplot(plot_case(tf_obj, f"{preset_label} – {loop_label}", window))
+        st.subheader(f"{loop_label} analysis")
+        st.latex(sp.latex(tf_obj.to_expr()))
+
+        metrics_df = get_time_response_metrics(poles_sym, response_flags, standard_params)
+        metrics_df["loop"] = loop_label
+        metrics_df["response"] = response_choice.lower()
+        metrics_df["damping"] = damping_label
+        metrics_df["K"] = standard_params["K"]
+        metrics_frames.append(metrics_df)
+
+        bode_fig = bode_figure(tf_obj, freq_decades)
+        pz_fig = pole_zero_figure(tf_obj)
+        resp_fig = time_response_figure(tf_obj, response_choice, horizon)
+
+        col_bode, col_pz = st.columns([2, 1])
+        with col_bode:
+            st.pyplot(bode_fig)
+        with col_pz:
+            st.pyplot(pz_fig)
+        st.pyplot(resp_fig)
+
+    if metrics_frames:
+        st.subheader("Key parameters")
+        merged = pd.concat(metrics_frames, ignore_index=True)
+        st.dataframe(merged.round(4), width="stretch")
 
 
 def main() -> None:
