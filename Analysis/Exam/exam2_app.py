@@ -440,19 +440,12 @@ def get_time_response_metrics(system: ctrl.TransferFunction, responses: dict[str
 
     data = {"w_n": w_n_val, "zeta": zeta_val, "w_d": w_d_val}
 
-    if active[0] == "step" and zeta_val < 1.0:
-        import cmath
-
-        poles = [complex(p) for p in system.poles()]
-        if len(poles) < 2:
-            raise ValueError("Not enough poles to compute step metrics")
-        p1, p2 = poles[0], poles[1]
-        diff = p1 - p2
-        T_r = np.inf if diff == 0 else (1.0 / diff) * cmath.log(p1 / p2, cmath.e).real
-
-        T_p = np.inf if w_d_val == 0 else np.pi / w_d_val
-        T_s = np.inf if zeta_val == 0 else 4.0 / (zeta_val * w_n_val)
-
+    if active[0] == "step" and zeta_val < 1.0 and w_d_val > 0:
+        # Standard 2nd-order underdamped step metrics (0–100% rise)
+        phi = np.arctan(np.sqrt(max(1 - zeta_val**2, 0.0)) / max(zeta_val, 1e-12))
+        T_r = float((np.pi - phi) / w_d_val)
+        T_p = float(np.pi / w_d_val)
+        T_s = float("inf") if zeta_val == 0 else float(4.0 / (zeta_val * w_n_val))
         data.update({"T_p": T_p, "T_r": T_r, "T_s": T_s})
 
     return pd.DataFrame([data])
