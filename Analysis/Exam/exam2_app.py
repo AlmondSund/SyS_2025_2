@@ -419,7 +419,7 @@ def symbolic_transfer_function(closed_loop: bool = False) -> Tuple[sp.Expr, list
     return H, poles
 
 
-def get_time_response_metrics(poles: list[sp.Expr], responses: dict[str, bool], standard_params: dict[str, float]) -> pd.DataFrame:
+def get_time_response_metrics(system: ctrl.TransferFunction, responses: dict[str, bool], standard_params: dict[str, float]) -> pd.DataFrame:
     """Return key time-domain metrics for the specified response type."""
     required_params = {"w_n", "zeta", "K"}
     missing_params = required_params.difference(standard_params)
@@ -434,12 +434,8 @@ def get_time_response_metrics(poles: list[sp.Expr], responses: dict[str, bool], 
     if len(active) != 1:
         raise ValueError("Exactly one response type must be set to True")
 
-    if len(poles) != 2:
-        raise ValueError("poles must contain exactly two elements [p1, p2]")
-
     w_n_val = float(standard_params["w_n"])
     zeta_val = float(standard_params["zeta"])
-    K_val = float(standard_params["K"])
     w_d_val = w_n_val * np.sqrt(max(1 - zeta_val**2, 0.0))
 
     data = {"w_n": w_n_val, "zeta": zeta_val, "w_d": w_d_val}
@@ -447,9 +443,10 @@ def get_time_response_metrics(poles: list[sp.Expr], responses: dict[str, bool], 
     if active[0] == "step" and zeta_val < 1.0:
         import cmath
 
-        subs = {w_n: w_n_val, zeta: zeta_val, K: K_val}
-        p1 = complex(sp.N(poles[0].subs(subs)))
-        p2 = complex(sp.N(poles[1].subs(subs)))
+        poles = [complex(p) for p in system.poles()]
+        if len(poles) < 2:
+            raise ValueError("Not enough poles to compute step metrics")
+        p1, p2 = poles[0], poles[1]
         diff = p1 - p2
         T_r = np.inf if diff == 0 else (1.0 / diff) * cmath.log(p1 / p2, cmath.e).real
 
@@ -480,20 +477,42 @@ def instantiate_transfer_function(standard_params: dict[str, float], closed_loop
     return tf_obj, poles_sym, subs
 
 
-def bode_figure(system: ctrl.TransferFunction, freq_decades: Tuple[int, int]) -> plt.Figure:
-    """Use the control API to create a Bode plot figure."""
+def bode_figure(system: ctrl.TransferFunction, freq_decades: Tuple[int, int], damping_label: str) -> plt.Figure:
+    """Use the control API to create a Bode plot figure, including damping classification in the title."""
     plt.figure(figsize=(8, 6))
     ctrl.bode_plot(system, initial_exp=freq_decades[0], final_exp=freq_decades[1], grid=True, show_axes=False, show=False)
     fig = plt.gcf()
+    fig.suptitle(f"Bode plot - {damping_label} system")
     fig.tight_layout()
     return fig
 
 
-def pole_zero_figure(system: ctrl.TransferFunction) -> plt.Figure:
-    """Use the control API to create a pole-zero plot figure."""
-    plt.figure(figsize=(5.5, 5.5))
-    ctrl.pole_zero_plot(system, grid=True, show_axes=True, show=False)
-    fig = plt.gcf()
+def pole_zero_figure(system: ctrl.TransferFunction, damping_label: str) -> plt.Figure:
+    """Plot poles and zeros with a stable layout for Streamlit."""
+    raw_zeros, raw_poles = ctrl.pole_zero_numerical_data(system)
+    zeros = np.asarray(raw_zeros, dtype=complex)
+    poles = np.asarray(raw_poles, dtype=complex)
+    fig, ax = plt.subplots(figsize=(5.5, 5.5))
+
+    if zeros.size:
+        ax.scatter(zeros.real, zeros.imag, marker="o", facecolors="none", edgecolors="tab:orange", label="Zeros")
+    if poles.size:
+        ax.scatter(poles.real, poles.imag, marker="x", color="tab:blue", label="Poles")
+
+    vals = np.concatenate([zeros.real, zeros.imag, poles.real, poles.imag]) if (zeros.size or poles.size) else np.array([1.0])
+    max_range = float(np.max(np.abs(vals)))
+    limit = max(1.0, max_range * 1.2)
+    ax.axhline(0, color="grey", linewidth=0.8)
+    ax.axvline(0, color="grey", linewidth=0.8)
+    ax.set_xlim(-limit, limit)
+    ax.set_ylim(-limit, limit)
+    ax.set_xlabel("Re{s}")
+    ax.set_ylabel("Im{s}")
+    ax.set_title(f"Pole–zero map ({damping_label})")
+    ax.grid(True, ls="--", lw=0.6)
+    if zeros.size or poles.size:
+        ax.legend(loc="best")
+
     fig.tight_layout()
     return fig
 
@@ -521,6 +540,21 @@ def time_response_figure(system: ctrl.TransferFunction, response: str, horizon: 
     return fig
 
 
+def loop_standard_params(tf_obj: ctrl.TransferFunction) -> dict[str, float | str]:
+    """Compute natural frequency, damping ratio, and gain from a second-order TF."""
+    den_poly = sp.Poly(sp.expand(tf_obj.den), tf_obj.var)
+    coeffs = [float(sp.N(c)) for c in den_poly.all_coeffs()]
+    if len(coeffs) < 3:
+        raise ValueError("Transfer function is not at least second order.")
+    a0, a1, a2 = coeffs[0], coeffs[1], coeffs[2]
+    wn_val = float(np.sqrt(a2 / a0))
+    zeta_val = float(a1 / (2 * np.sqrt(a0 * a2)))
+    wd_val = wn_val * np.sqrt(max(1 - zeta_val**2, 0.0))
+    dc_gain = float(sp.N(tf_obj.num.subs(tf_obj.var, 0) / tf_obj.den.subs(tf_obj.var, 0)))
+    damping = classify_damping({"w_n": wn_val, "zeta": zeta_val, "K": dc_gain if dc_gain != 0 else 1.0})
+    return {"w_n": wn_val, "zeta": zeta_val, "w_d": wd_val, "K": dc_gain, "damping": damping}
+
+
 def render_mechanical_panel() -> None:
     st.header("2) Mass–spring–damper ⇄ RLC study")
 
@@ -540,11 +574,12 @@ Closed loop uses unity feedback. Choose whether to type mechanical or electrical
         unsafe_allow_html=True,
     )
 
-    input_mode = st.select_slider(
+    input_mode = st.radio(
         "Parameter domain",
-        options=["Mechanical (m, c, k)", "Electrical (R, L, C)"],
-        value="Mechanical (m, c, k)",
-        help="Slide to decide if you want to enter mechanical or electrical values.",
+        ["Mechanical (m, c, k)", "Electrical (R, L, C)"],
+        index=0,
+        horizontal=True,
+        help="Choose whether to type mechanical or electrical values.",
     )
 
     default_mech = {"m": 1.0, "c": 10.0, "k": 100.0}
@@ -583,12 +618,6 @@ Closed loop uses unity feedback. Choose whether to type mechanical or electrical
         st.markdown("**Electrical equivalents**")
         st.table(pd.DataFrame(electrical_params, index=["Value"]).T)
 
-    col_a, col_b, col_c, col_d = st.columns(4)
-    col_a.metric("wn [rad/s]", f"{standard_params['w_n']:.3f}")
-    col_b.metric("zeta", f"{standard_params['zeta']:.3f}")
-    col_c.metric("w_d [rad/s]", f"{w_d_val:.3f}")
-    col_d.metric("Damping", damping_label)
-
     loop_modes = st.multiselect("Systems to display", ["Open-loop", "Closed-loop"], default=["Open-loop", "Closed-loop"])
     response_choice = st.radio("Time response to plot", ["Impulse", "Step", "Ramp"], index=1, horizontal=True)
     freq_decades = st.slider("Bode frequency range (powers of 10 rad/s)", -4, 5, value=(-2, 3))
@@ -606,22 +635,29 @@ Closed loop uses unity feedback. Choose whether to type mechanical or electrical
     metrics_frames = []
     for loop_label in loop_modes:
         closed_loop = loop_label == "Closed-loop"
-        tf_obj, poles_sym, _ = instantiate_transfer_function(standard_params, closed_loop=closed_loop)
-        horizon = choose_time_window(standard_params["w_n"], standard_params["zeta"])
+        tf_obj, _poles_sym, _ = instantiate_transfer_function(standard_params, closed_loop=closed_loop)
+        loop_params = loop_standard_params(tf_obj)
+        horizon = choose_time_window(loop_params["w_n"], loop_params["zeta"])
 
         st.divider()
         st.subheader(f"{loop_label} analysis")
         st.latex(sp.latex(tf_obj.to_expr()))
 
-        metrics_df = get_time_response_metrics(poles_sym, response_flags, standard_params)
+        col_a, col_b, col_c, col_d = st.columns(4)
+        col_a.metric("wn [rad/s]", f"{loop_params['w_n']:.3f}")
+        col_b.metric("zeta", f"{loop_params['zeta']:.3f}")
+        col_c.metric("w_d [rad/s]", f"{loop_params['w_d']:.3f}")
+        col_d.metric("Damping", loop_params["damping"])
+
+        metrics_df = get_time_response_metrics(tf_obj, response_flags, {"w_n": loop_params["w_n"], "zeta": loop_params["zeta"], "K": loop_params["K"]})
         metrics_df["loop"] = loop_label
         metrics_df["response"] = response_choice.lower()
-        metrics_df["damping"] = damping_label
-        metrics_df["K"] = standard_params["K"]
+        metrics_df["damping"] = loop_params["damping"]
+        metrics_df["K"] = loop_params["K"]
         metrics_frames.append(metrics_df)
 
-        bode_fig = bode_figure(tf_obj, freq_decades)
-        pz_fig = pole_zero_figure(tf_obj)
+        bode_fig = bode_figure(tf_obj, freq_decades, loop_params["damping"])
+        pz_fig = pole_zero_figure(tf_obj, loop_params["damping"])
         resp_fig = time_response_figure(tf_obj, response_choice, horizon)
 
         col_bode, col_pz = st.columns([2, 1])
